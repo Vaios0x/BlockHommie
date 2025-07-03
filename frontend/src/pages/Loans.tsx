@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAccount, useContractWrite, useWaitForTransaction } from 'wagmi';
+import { useAccount, useContractWrite, useTransaction } from 'wagmi';
 import { readContract } from '@wagmi/core';
 import { parseEther, formatEther, type Abi } from 'viem';
 import { useLoans, loanContractABI } from '../hooks/useLoans';
@@ -14,12 +14,10 @@ const LOAN_CONTRACT_ADDRESS = '0x...' as `0x${string}`; // Reemplazar con la dir
 // Tipo para los parámetros de la función de escritura del contrato
 type ExecuteWriteParams = {
     address: `0x${string}`;
-    abi: typeof loanContractABI; // Usar el ABI importado y completo
-    // Extraer los nombres de las funciones del ABI para mayor seguridad de tipo
-    // Asegurarse que solo tomamos funciones 'nonpayable' o 'payable' que son las que usaría writeContractAsync
+    abi: typeof loanContractABI;
     functionName: Extract<(typeof loanContractABI)[number], { type: "function", stateMutability: "nonpayable" | "payable" }>["name"];
     args?: readonly unknown[];
-    value?: bigint; // wagmi manejará esto con sobrecargas para funciones payable/nonpayable
+    value?: bigint;
 };
 
 export default function Loans() {
@@ -36,30 +34,32 @@ export default function Loans() {
   const [pendingTx, setPendingTx] = useState<{ hash: `0x${string}`; loanId?: number; action?: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const { writeAsync: writeContractAsync } = useContractWrite({
+  const { write: writeContract } = useContractWrite({
     address: LOAN_CONTRACT_ADDRESS,
     abi: loanContractABI,
   });
 
-  const { isLoading: isConfirming, isSuccess: isConfirmed, error: confirmationError } = useWaitForTransaction({
+  const { isLoading: isConfirming, isSuccess: isConfirmed, error: confirmationError } = useTransaction({
     hash: pendingTx?.hash,
   });
 
   useEffect(() => {
     if (isConfirmed || confirmationError) {
-        if (confirmationError) {
-             console.error("Error de confirmación:", confirmationError);
-        }
+      if (confirmationError) {
+        console.error("Error de confirmación:", confirmationError);
+      }
       setPendingTx(null);
       setIsSubmitting(false);
-      // TODO: Forzar una recarga de datos aquí si es necesario, e.g., refetch de useLoans
     }
   }, [isConfirmed, confirmationError]);
 
   const executeWrite = async (params: ExecuteWriteParams, loanId?: number, action?: string) => {
     setIsSubmitting(true);
     try {
-      const result = await writeContractAsync(params.args as any);
+      const result = await writeContract({
+        ...params,
+        value: params.value,
+      });
       
       if (result?.hash) {
         setPendingTx({ hash: result.hash, loanId, action });
@@ -102,7 +102,6 @@ export default function Loans() {
   const handleRepayLoan = async (loanId: number) => {
     setIsSubmitting(true);
     try {
-      // 1. Calcular el monto exacto a pagar (principal + intereses)
       const repaymentAmount = await readContract({
         address: LOAN_CONTRACT_ADDRESS,
         abi: loanContractABI,
@@ -113,23 +112,19 @@ export default function Loans() {
       if (typeof repaymentAmount !== 'bigint' || repaymentAmount <= 0n) {
         console.error("No se pudo calcular el monto del repago o es inválido:", repaymentAmount);
         setIsSubmitting(false);
-        // Podrías mostrar un error al usuario aquí
         return;
       }
       
-      // 2. Ejecutar la transacción de repago con el monto calculado
-      await executeWrite({ // Asegúrate de que executeWrite es async y lo esperas si es necesario.
+      await executeWrite({
         address: LOAN_CONTRACT_ADDRESS,
         abi: loanContractABI,
         functionName: 'repayLoan',
         args: [BigInt(loanId)],
-        value: repaymentAmount, // Usar el monto calculado
+        value: repaymentAmount,
       }, loanId, 'pagar');
-      // setIsSubmitting(false) se maneja dentro de executeWrite o en el useEffect de pendingTx
     } catch (error) {
       console.error("Error al procesar el repago del préstamo:", error);
-      setIsSubmitting(false); // Asegurar que se limpia el estado en caso de error aquí
-      // Mostrar error al usuario
+      setIsSubmitting(false);
     }
   };
 
@@ -284,8 +279,8 @@ export default function Loans() {
                   </div>
                 );
               })}
-    </div>
-  </div>
+            </div>
+          </div>
 
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-xl font-semibold mb-4">Mis Préstamos</h2>
